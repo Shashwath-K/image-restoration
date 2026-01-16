@@ -23,29 +23,29 @@ class ColorizationModel:
         self.model = None
         self.model_loaded = False
 
-        if weights_path and os.path.isfile(weights_path):
-            try:
-                self._load_weights(weights_path)
-                self.model_loaded = True
-            except Exception as e:
-                print(f"[ColorizationModel] Failed to load weights: {e}")
-                self.model_loaded = False
-        else:
-             print(f"[ColorizationModel] Weights not found at {weights_path}. Model will not be loaded.")
+        # Always attempt to load the model (pretrained by default)
+        try:
+            self._load_weights(weights_path)
+            self.model_loaded = True
+        except Exception as e:
+            print(f"[ColorizationModel] Failed to load weights: {e}")
+            self.model_loaded = False
 
     # ----------------------------------------------------------
     # Model loading
     # ----------------------------------------------------------
-    def _load_weights(self, path: str):
+    def _load_weights(self, path: Optional[str] = None):
         """
-        Load ColorNet weights.
+        Load ECCV16 weights.
         """
-        from .eccv16 import ColorNet
-        self.model = ColorNet()
-        state = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(state)
+        from .eccv16 import eccv16
+        # Use pretrained weights by default. If path is provided, we could prioritize it,
+        # but since we changed architecture, old weights might be invalid.
+        # We'll stick to official pretrained weights for reliability unless user specifically overwrites.
+        # Here we just call eccv16(pretrained=True) which handles downloading.
+        self.model = eccv16(pretrained=True)
         self.model.to(self.device).eval()
-        print(f"[ColorizationModel] Loaded weights from {path}")
+        print(f"[ColorizationModel] Loaded ECCV16 model (Pretrained)")
 
     # ----------------------------------------------------------
     # Public API
@@ -63,39 +63,36 @@ class ColorizationModel:
             return image
 
         # 1. Prepare Input (BGR -> Lab)
-        # Resize for model if needed? Let's just run on full res or rescale.
-        # For simplicity, we'll process at input resolution (assuming standard sizes).
-        # Normalization: L channel 0-100 -> 0-1 or -1 to 1?
-        # Standard: 0-100.
-        
+        # OpenCV converts L: 0..255, a: 0..255, b: 0..255
+        h, w = image.shape[:2]
         lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-        l_channel = lab[:, :, 0] # 0-255 in OpenCV uint8 representation (scale L=100 -> 255)
+        l_channel = lab[:, :, 0] # 0-255
         
         if self.model_loaded and self.model is not None:
-             # Preprocess l_channel
-             # OpenCV L is 0-255. Model likely expects normalized float.
-             l_norm = l_channel.astype(np.float32) / 255.0 # 0-1
-             # Center to -0.5 to 0.5? Or 0-1.
-             # AutoEncoder usually likes centered.
-             l_norm = (l_norm - 0.5) * 2.0 # -1 to 1
+             # Preprocess l_channel for ECCV16
+             # Model expects L in range 0..100
+             l_img_enc = l_channel.astype(np.float32) * 100.0 / 255.0
              
-             # (1, H, W) -> (B, 1, H, W)
-             inp_tensor = torch.from_numpy(l_norm).float().unsqueeze(0).unsqueeze(0)
+             # (1, 1, H, W)
+             inp_tensor = torch.from_numpy(l_img_enc).float().unsqueeze(0).unsqueeze(0)
              inp_tensor = inp_tensor.to(self.device)
 
              with torch.no_grad():
-                 # Model outputs ab in -1 to 1 range
+                 # Model outputs ab in (B, 2, H, W)
+                 # Output range is approx -110..110 (centered)
                  ab_tensor = self.model(inp_tensor)
 
              # Postprocess ab
              ab_out = ab_tensor.squeeze(0).cpu().numpy() # (2, H, W)
              ab_out = ab_out.transpose(1, 2, 0) # (H, W, 2)
              
-             # Scale -1..1 -> OpenCV a,b range.
-             # OpenCV Lab: L=0..255, a=0..255, b=0..255 (offset 128)
-             # Real Lab: a,b approx -128..127.
-             # OpenCV maps this to 0-255 by adding 128.
-             ab_out = (ab_out * 128.0) + 128.0 
+             # Resize if necessary (model upsampling might not perfectly match weird dimensions)
+             if ab_out.shape[:2] != (h, w):
+                 ab_out = cv2.resize(ab_out, (w, h))
+
+             # Scale to OpenCV range: a,b 0..255 (offset 128)
+             # Model output is centered 0.
+             ab_out = ab_out + 128.0
              ab_out = np.clip(ab_out, 0, 255).astype(np.uint8)
              
              # Combine L + predicted ab

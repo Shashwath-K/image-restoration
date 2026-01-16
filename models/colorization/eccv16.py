@@ -2,124 +2,129 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.hub import load_state_dict_from_url
+import os
 
-# Standalone ResNet BasicBlock
-class BasicBlock(nn.Module):
-    expansion = 1
+class BaseColor(nn.Module):
+    def __init__(self):
+        super(BaseColor, self).__init__()
 
-    def __init__(self, in_planes, planes, stride=1):
-        super(BasicBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(planes)
+        self.l_cent = 50.
+        self.l_norm = 100.
+        self.ab_norm = 110.
 
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != self.expansion*planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, self.expansion*planes, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(self.expansion*planes)
-            )
+    def normalize_l(self, in_l):
+        return (in_l-self.l_cent)/self.l_norm
 
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += self.shortcut(x)
-        out = F.relu(out)
-        return out
+    def unnormalize_l(self, in_l):
+        return in_l*self.l_norm + self.l_cent
 
-class ColorNet(nn.Module):
-    """
-    ResNet-based U-Net for Image Colorization (Standalone Implementation).
-    Backbone: ResNet18-like (modified for 1-channel input)
-    Input: L channel (1, H, W)
-    Output: ab channels (2, H, W)
-    """
-    def __init__(self, pretrained=False):
-        super(ColorNet, self).__init__()
-        
-        # 1. Encoder (ResNet18-like)
-        self.in_planes = 64
-        
-        self.enc1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        
-        self.layer1 = self._make_layer(BasicBlock, 64, 2, stride=1)
-        self.layer2 = self._make_layer(BasicBlock, 128, 2, stride=2)
-        self.layer3 = self._make_layer(BasicBlock, 256, 2, stride=2)
-        self.layer4 = self._make_layer(BasicBlock, 512, 2, stride=2)
-        
-        # 2. Decoder with Skip Connections
-        self.up4 = self._up_block(512, 256)
-        self.up3 = self._up_block(256 + 256, 128)
-        self.up2 = self._up_block(128 + 128, 64)
-        self.up1 = self._up_block(64 + 64, 64)
-        self.up0 = self._up_block(64 + 64, 32)
-        
-        self.final = nn.Sequential(
-            nn.Conv2d(32, 16, kernel_size=3, padding=1),
-            nn.ReLU(True),
-            nn.Conv2d(16, 2, kernel_size=3, padding=1),
-            nn.Tanh()
-        )
+    def normalize_ab(self, in_ab):
+        return in_ab/self.ab_norm
 
-    def _make_layer(self, block, planes, num_blocks, stride):
-        strides = [stride] + [1]*(num_blocks-1)
-        layers = []
-        for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
-            self.in_planes = planes * block.expansion
-        return nn.Sequential(*layers)
+    def unnormalize_ab(self, in_ab):
+        return in_ab*self.ab_norm
 
-    def _up_block(self, in_ch, out_ch):
-        return nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(True)
-        )
-        
-    def _align_size(self, x, ref):
-        if x.size()[2:] != ref.size()[2:]:
-            x = F.interpolate(x, size=ref.size()[2:], mode='bilinear', align_corners=True)
-        return x
+class ECCVGenerator(BaseColor):
+    def __init__(self, norm_layer=nn.BatchNorm2d):
+        super(ECCVGenerator, self).__init__()
 
-    def forward(self, x):
-        # Encoder
-        x0 = self.enc1(x)
-        x0 = self.bn1(x0)
-        x0 = self.relu(x0) # (64, H/2, W/2)
-        
-        x_pool = self.maxpool(x0) # (64, H/4, W/4)
-        
-        x1 = self.layer1(x_pool) # (64, H/4, W/4)
-        x2 = self.layer2(x1) # (128, H/8, W/8)
-        x3 = self.layer3(x2) # (256, H/16, W/16)
-        x4 = self.layer4(x3) # (512, H/32, W/32)
-        
-        # Decoder
-        d4 = self.up4(x4) # -> 256
-        d4 = self._align_size(d4, x3)
-        d4 = torch.cat([d4, x3], dim=1)
-        
-        d3 = self.up3(d4) # -> 128
-        d3 = self._align_size(d3, x2)
-        d3 = torch.cat([d3, x2], dim=1)
-        
-        d2 = self.up2(d3) # -> 64
-        d2 = self._align_size(d2, x1)
-        d2 = torch.cat([d2, x1], dim=1)
-        
-        d1 = self.up1(d2) # -> 64
-        d1 = self._align_size(d1, x0)
-        d1 = torch.cat([d1, x0], dim=1)
-        
-        out = self.up0(d1)
-        
-        # Final safety for input size match
-        if out.size()[2:] != x.size()[2:]:
-             out = F.interpolate(out, size=x.size()[2:], mode='bilinear', align_corners=True)
-            
-        return self.final(out)
+        model1=[nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=True),]
+        model1+=[nn.ReLU(True),]
+        model1+=[nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1, bias=True),]
+        model1+=[nn.ReLU(True),]
+        model1+=[norm_layer(64),]
+
+        model2=[nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1, bias=True),]
+        model2+=[nn.ReLU(True),]
+        model2+=[nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1, bias=True),]
+        model2+=[nn.ReLU(True),]
+        model2+=[norm_layer(128),]
+
+        model3=[nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1, bias=True),]
+        model3+=[nn.ReLU(True),]
+        model3+=[nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=True),]
+        model3+=[nn.ReLU(True),]
+        model3+=[nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1, bias=True),]
+        model3+=[nn.ReLU(True),]
+        model3+=[norm_layer(256),]
+
+        model4=[nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1, bias=True),]
+        model4+=[nn.ReLU(True),]
+        model4+=[nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1, bias=True),]
+        model4+=[nn.ReLU(True),]
+        model4+=[nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1, bias=True),]
+        model4+=[nn.ReLU(True),]
+        model4+=[norm_layer(512),]
+
+        model5=[nn.Conv2d(512, 512, kernel_size=3, dilation=2, stride=1, padding=2, bias=True),]
+        model5+=[nn.ReLU(True),]
+        model5+=[nn.Conv2d(512, 512, kernel_size=3, dilation=2, stride=1, padding=2, bias=True),]
+        model5+=[nn.ReLU(True),]
+        model5+=[nn.Conv2d(512, 512, kernel_size=3, dilation=2, stride=1, padding=2, bias=True),]
+        model5+=[nn.ReLU(True),]
+        model5+=[norm_layer(512),]
+
+        model6=[nn.Conv2d(512, 512, kernel_size=3, dilation=2, stride=1, padding=2, bias=True),]
+        model6+=[nn.ReLU(True),]
+        model6+=[nn.Conv2d(512, 512, kernel_size=3, dilation=2, stride=1, padding=2, bias=True),]
+        model6+=[nn.ReLU(True),]
+        model6+=[nn.Conv2d(512, 512, kernel_size=3, dilation=2, stride=1, padding=2, bias=True),]
+        model6+=[nn.ReLU(True),]
+        model6+=[norm_layer(512),]
+
+        model7=[nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1, bias=True),]
+        model7+=[nn.ReLU(True),]
+        model7+=[nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1, bias=True),]
+        model7+=[nn.ReLU(True),]
+        model7+=[nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1, bias=True),]
+        model7+=[nn.ReLU(True),]
+        model7+=[norm_layer(512),]
+
+        model8=[nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1, bias=True),]
+        model8+=[nn.ReLU(True),]
+        model8+=[nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=True),]
+        model8+=[nn.ReLU(True),]
+        model8+=[nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=True),]
+        model8+=[nn.ReLU(True),]
+
+        model8+=[nn.Conv2d(256, 313, kernel_size=1, stride=1, padding=0, bias=True),]
+
+        self.model1 = nn.Sequential(*model1)
+        self.model2 = nn.Sequential(*model2)
+        self.model3 = nn.Sequential(*model3)
+        self.model4 = nn.Sequential(*model4)
+        self.model5 = nn.Sequential(*model5)
+        self.model6 = nn.Sequential(*model6)
+        self.model7 = nn.Sequential(*model7)
+        self.model8 = nn.Sequential(*model8)
+
+        self.softmax = nn.Softmax(dim=1)
+        self.model_out = nn.Conv2d(313, 2, kernel_size=1, padding=0, dilation=1, stride=1, bias=False)
+        self.upsample4 = nn.Upsample(scale_factor=4, mode='bilinear')
+
+    def forward(self, input_l):
+        conv1_2 = self.model1(self.normalize_l(input_l))
+        conv2_2 = self.model2(conv1_2)
+        conv3_3 = self.model3(conv2_2)
+        conv4_3 = self.model4(conv3_3)
+        conv5_3 = self.model5(conv4_3)
+        conv6_3 = self.model6(conv5_3)
+        conv7_3 = self.model7(conv6_3)
+        conv8_3 = self.model8(conv7_3)
+        out_reg = self.model_out(self.softmax(conv8_3))
+
+        return self.unnormalize_ab(self.upsample4(out_reg))
+
+def eccv16(pretrained=True):
+    model = ECCVGenerator()
+    if pretrained:
+        model_url = 'https://colorizers.s3.us-east-2.amazonaws.com/colorization_release_v2-9b330a0b.pth'
+        # Check if we have a local copy to avoid re-downloading to cache every time if user manages weights
+        # But load_state_dict_from_url handles caching.
+        state_dict = load_state_dict_from_url(model_url, map_location='cpu', progress=True)
+        model.load_state_dict(state_dict)
+    return model
+
+# Backward compatibility (alias)
+ColorNet = ECCVGenerator

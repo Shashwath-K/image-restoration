@@ -59,7 +59,7 @@ image-restoration-system/
 ├── models/
 │   ├── inpainting/            # LaMa weights / configs
 │   ├── interpolation/         # RIFE weights / configs
-│   ├── colorization/          # DeOldify weights / notebooks
+│   ├── colorization/          # ECCV16 weights / code
 │   └── denoising/             # DnCNN / pytorch weights
 │
 ├── pipeline/
@@ -87,8 +87,8 @@ Repository: https://github.com/advimman/lama
 RIFE — real-time intermediate flow estimation for frame interpolation.
 Repository: https://github.com/hzwer/ECCV2022-RIFE
 
-DeOldify — deep-learning colorization & restoration for images & video.
-Repository: https://github.com/jantic/DeOldify
+ECCV16 — Colorful Image Colorization (Zhang et al.).
+Repository: https://github.com/richzhang/colorization
 
 DnCNN — residual learning CNN for image denoising.
 Repository: https://github.com/cszn/DnCNN
