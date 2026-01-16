@@ -1,0 +1,10 @@
+model:
+  name: "DnCNN"
+  weights_path: "models/denoising/weights/dncnn.pth"
+
+runtime:
+  device: "cuda"     # "cuda" or "cpu"
+
+inference:
+  fallback_filter: true
+  fallback_kernel: 3

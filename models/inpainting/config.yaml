@@ -1,0 +1,10 @@
+model:
+  name: "LaMa"
+  weights_path: "models/inpainting/weights/lama.pth"
+
+runtime:
+  device: "cuda"        # "cuda" or "cpu"
+
+inference:
+  fallback_opencv: true
+  opencv_method: "telea"   # "telea" or "ns"

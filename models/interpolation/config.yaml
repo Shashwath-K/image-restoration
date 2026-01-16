@@ -1,0 +1,13 @@
+# Interpolation configuration
+model:
+  name: "RIFE"
+  variant: "rife-v4"      # user-info, not enforced by code
+  weights_path: "models/interpolation/weights/rife.pth"  # place pretrained weights here
+
+runtime:
+  device: "cuda"          # "cuda" or "cpu"
+  dtype: "float32"
+
+inference:
+  num_mid_frames: 1       # number of intermediate frames between two consecutive frames
+  blend_fallback: true    # if True and weights not found, use linear blend fallback
