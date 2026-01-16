@@ -6,5 +6,4 @@ runtime:
   device: "cuda"     # "cuda" or "cpu"
 
 inference:
-  fallback_filter: true
-  fallback_kernel: 3
+  batch_size: 1

@@ -6,5 +6,6 @@ runtime:
   device: "cuda"     # "cuda" or "cpu"
 
 inference:
-  fallback_opencv: true
-  saturation_boost: 1.2
+  # fallback_opencv: true - REMOVED
+  # saturation_boost: 1.2 - REMOVED
+  batch_size: 1

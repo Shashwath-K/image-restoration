@@ -14,11 +14,13 @@ class ColorizeService:
                  device: Optional[str] = None,
                  weights_path: Optional[str] = None):
         self.device = get_device(device)
+
+        if weights_path is None:
+            weights_path = "models/colorization/weights/colorizer.pth"
+            
         self.model = ColorizationModel(
             device=self.device,
-            weights_path=weights_path,
-            use_fallback=True,
-            saturation_boost=1.2
+            weights_path=weights_path
         )
 
     def restore(self, image: np.ndarray) -> np.ndarray:

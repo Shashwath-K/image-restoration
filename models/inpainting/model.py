@@ -15,12 +15,10 @@ import torch
 class InpaintingModel:
     def __init__(self,
                  device: Optional[str] = None,
-                 weights_path: Optional[str] = None,
-                 use_fallback: bool = True):
+                 weights_path: Optional[str] = None):
 
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
         self.weights_path = weights_path
-        self.use_fallback = use_fallback
 
         self.model = None
         self.model_loaded = False
@@ -32,37 +30,22 @@ class InpaintingModel:
             except Exception as e:
                 print(f"[InpaintingModel] Failed to load weights: {e}")
                 self.model_loaded = False
+        else:
+             print(f"[InpaintingModel] Weights not found at {weights_path}. Model will not be loaded.")
 
     # ------------------------------------------------------------------
-    # Model loading (placeholder for LaMa integration)
+    # Model loading
     # ------------------------------------------------------------------
     def _load_weights(self, path: str):
         """
-        Placeholder loader.
-        Replace with LaMa model initialization logic.
+        Load UNet model weights.
         """
+        from .unet import UNet
+        self.model = UNet(n_channels=4, n_classes=3, bilinear=True)
         state = torch.load(path, map_location=self.device)
-        # Example:
-        # self.model = LamaModel(...)
-        # self.model.load_state_dict(state)
-        # self.model.to(self.device).eval()
-        print(f"[InpaintingModel] (placeholder) Loaded weights from {path}")
-
-    # ------------------------------------------------------------------
-    # Fallback: OpenCV inpainting
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _opencv_inpaint(image: np.ndarray, mask: np.ndarray, method: str = "telea") -> np.ndarray:
-        """
-        image : BGR uint8 image
-        mask  : uint8 mask (255 = missing region)
-        """
-        if method.lower() == "ns":
-            flag = cv2.INPAINT_NS
-        else:
-            flag = cv2.INPAINT_TELEA
-
-        return cv2.inpaint(image, mask, inpaintRadius=3, flags=flag)
+        self.model.load_state_dict(state)
+        self.model.to(self.device).eval()
+        print(f"[InpaintingModel] Loaded weights from {path}")
 
     # ------------------------------------------------------------------
     # Public API
@@ -76,14 +59,37 @@ class InpaintingModel:
         - uint8, with 255 indicating missing pixels
         """
         if self.model_loaded and self.model is not None:
-            # Real model inference goes here
-            # Example pseudocode:
-            # inp = preprocess(image, mask)
-            # with torch.no_grad():
-            #     out = self.model(inp)
-            # return postprocess(out)
-            raise NotImplementedError("Deep model inference not wired yet.")
+             # Preprocess
+             # Normalize image to 0-1
+             img_norm = image.astype(np.float32) / 255.0
+             # Normalize mask to 0-1 (0=valid, 1=missing/target)
+             mask_norm = mask.astype(np.float32) / 255.0
+             
+             # Expand mask dim: (H, W) -> (H, W, 1)
+             if mask_norm.ndim == 2:
+                 mask_norm = mask_norm[:, :, np.newaxis]
+                 
+             # Concatenate along channel dim: (H, W, 3) + (H, W, 1) -> (H, W, 4)
+             inp = np.concatenate([img_norm, mask_norm], axis=2)
+             
+             # HWC -> CHW -> Batch
+             inp_tensor = torch.from_numpy(inp.transpose(2, 0, 1)).float().unsqueeze(0)
+             inp_tensor = inp_tensor.to(self.device)
+
+             with torch.no_grad():
+                 out_tensor = self.model(inp_tensor)
+
+             # Postprocess
+             out_tensor = out_tensor.squeeze(0).cpu()
+             out_img = out_tensor.numpy().transpose(1, 2, 0)
+             out_img = np.clip(out_img * 255.0, 0, 255).astype(np.uint8)
+             
+             # Composite back: Only replace masked regions? 
+             # Usually standard inpainting practice, but if model outputs full image, we can just return it.
+             # Let's trust the model output for consistency, or we can composite.
+             # Composite is safer if model is weak on valid pixels.
+             # result = (mask > 127) * out_img + (mask <= 127) * image
+             # But here let's just return the model output as it's a "restoration" model.
+             return out_img
         else:
-            if not self.use_fallback:
-                raise RuntimeError("No model loaded and fallback disabled.")
-            return self._opencv_inpaint(image, mask)
+             raise RuntimeError("Inpainting model (UNet) not loaded. Cannot perform inpainting.")

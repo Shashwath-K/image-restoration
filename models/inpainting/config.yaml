@@ -6,5 +6,6 @@ runtime:
   device: "cuda"        # "cuda" or "cpu"
 
 inference:
-  fallback_opencv: true
-  opencv_method: "telea"   # "telea" or "ns"
+  # fallback_opencv: true - REMOVED
+  # opencv_method: "telea"   # REMOVED
+  batch_size: 1

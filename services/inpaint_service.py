@@ -14,10 +14,13 @@ class InpaintService:
                  device: Optional[str] = None,
                  weights_path: Optional[str] = None):
         self.device = get_device(device)
+        
+        if weights_path is None:
+            weights_path = "models/inpainting/weights/inpainting.pth"
+
         self.model = InpaintingModel(
             device=self.device,
-            weights_path=weights_path,
-            use_fallback=True
+            weights_path=weights_path
         )
 
     def restore(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
